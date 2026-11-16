@@ -1,8 +1,8 @@
 # finemapping-with-gentropy
 
 Fine-map one GWAS with [gentropy](https://github.com/opentargets/gentropy) the way Open Targets
-does: locus-breaker clumping, SuSiE-inf per locus and credible set QC, with the production
-parameters. Everything runs on a laptop from public data. No Open Targets bucket and no cloud
+does: summary statistics QC, locus-breaker clumping, SuSiE-inf per locus and credible set
+QC, with the production parameters. Everything runs on a laptop from public data. No Open Targets bucket and no cloud
 account are needed.
 
 ## Requirements
@@ -29,25 +29,41 @@ scripts/download_example.sh
 uv run fmg ingest --input data/raw/35213538-GCST90093040-EFO_0004574.h.tsv.gz \
   --output data/sumstats/GCST90093040
 
-# 3. Once per LD population: copy the Pan-UKBB GRCh38 variant index (1.3 GB)
+# 3. Summary statistics QC: mean beta, PZ, GC lambda, number of variants
+uv run fmg qc --sumstats data/sumstats/GCST90093040 --output data/sumstats_qc/GCST90093040
+
+# 4. Once per LD population: copy the Pan-UKBB GRCh38 variant index (1.3 GB)
 scripts/download_pan_ukbb_index.sh EUR
 
-# 4. Once per LD population: align its alleles to the summary statistics
+# 5. Once per LD population: align its alleles to the summary statistics
 uv run fmg ld-index --sumstats data/sumstats/GCST90093040 --output data/ld_index \
   --variant-table "data/pan_ukbb/UKBB.{POP}.ldadj.variant.b38.ht"
 
-# 5. Study index -> locus breaker -> SuSiE-inf -> credible set QC
+# 6. Study index (with the QC flags) -> locus breaker -> SuSiE-inf -> credible set QC
 uv run fmg run --sumstats data/sumstats/GCST90093040 --study-id GCST90093040 \
-  --n-samples 115082 --ld-population nfe \
+  --n-samples 115082 --ld-population nfe --sumstats-qc data/sumstats_qc/GCST90093040 \
   --ld-source public --ld-index data/ld_index --out out/GCST90093040
 ```
+
+`fmg qc` prints each metric beside its production threshold:
+
+| Metric | Passes when |
+| --- | --- |
+| `mean_beta` | \|mean beta\| ≤ 0.05 |
+| `mean_diff_pz`, `se_diff_pz` | \|mean\| ≤ 0.05 and SE ≤ 0.05 (reported p-values agree with z = beta/SE) |
+| `gc_lambda` | 0.7 ≤ λ ≤ 2.5 |
+| `n_variants` | ≥ 2,000,000 |
+
+`fmg run --sumstats-qc` turns the metrics into study index flags with
+`StudyIndex.annotate_sumstats_qc`. A study that fails one is not fine-mapped, and `fmg run`
+exits with the failing flags. `--no-sumstats-qc` skips the check and assumes the study passes.
 
 `fmg run` options:
 
 - `--regions 19:44500000-45300000 ...` fine-maps only loci whose lead is in a region.
 - `--max-loci N` fine-maps the first N loci.
 - `--skip-clumping` reuses the clumped loci.
-- `--qc-only` reruns credible set QC alone.
+- `--credible-set-qc-only` reruns credible set QC alone.
 - `--ld-source opentargets` reads the Open Targets copy of the LD (Open Targets credentials).
 
 ## Your own study
@@ -56,14 +72,15 @@ uv run fmg run --sumstats data/sumstats/GCST90093040 --study-id GCST90093040 \
 2. Pass `--study-id` to `fmg ingest` unless the file name has a `GCST` id.
 3. Give `fmg run` the study's sample size (`--n-samples`) and LD population (`--ld-population`): `nfe` for European, `afr` for African, `csa` for Central and South Asian. These are the Pan-UKBB populations.
 
-`fmg run` writes the study index row the fine-mapper needs (`pipeline.write_study_index`).
-The fine-mapper skips the study unless that row passes every gentropy check, so the row is
-written to pass them.
+`fmg run` writes the study index row the fine-mapper needs (`pipeline.write_study_index`):
+it passes every gentropy check on study type, ancestry and analysis flags, and carries the QC
+flags from `fmg qc`.
 
 ## Outputs (`out/<study>/`)
 
 | Path | Content |
 | --- | --- |
+| `study_index/` | The study index row, with the QC values and any failing flag |
 | `study_locus_lb_clumped/` | Loci from the locus breaker, one partition per `studyLocusId` |
 | `credible_sets/<locus>/` | SuSiE-inf credible sets of each locus (`StudyLocus`, variants in `locus`) |
 | `logs/<locus>.log` | Per-locus counts, run time, number of credible sets, or the reason it was skipped |

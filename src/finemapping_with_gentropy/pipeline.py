@@ -10,6 +10,8 @@ import pandas as pd
 import pyspark.sql.functions as f
 from gentropy.common.session import Session
 from gentropy.credible_set_qc import CredibleSetQCStep
+from gentropy.dataset.study_index import StudyIndex
+from gentropy.dataset.summary_statistics_qc import SummaryStatisticsQC
 from gentropy.locus_breaker_clumping import LocusBreakerClumpingStep
 from gentropy.susie_finemapper import SusieFineMapperStep
 from pyspark.sql import types as t
@@ -20,13 +22,22 @@ logger = logging.getLogger(__name__)
 
 
 def write_study_index(
-    session: Session, path: str, study_id: str, n_samples: int, ld_population: str
-) -> None:
+    session: Session,
+    path: str,
+    study_id: str,
+    n_samples: int,
+    ld_population: str,
+    sumstats_qc_path: str | None,
+) -> list[str]:
     """Write the smallest study index the fine-mapper accepts.
 
     The fine-mapper reads the LD population and sample size from the study index, and skips
     the study unless it is a GWAS with summary statistics, at least 90% of its samples from
     nfe, csa or afr, and no failing QC or analysis flag.
+
+    With `sumstats_qc_path`, the QC metrics are turned into `qualityControls` flags by
+    `StudyIndex.annotate_sumstats_qc`, with the production thresholds. A study with no QC
+    row (a `studyId` that does not match) is flagged as having no summary statistics.
 
     Args:
         session (Session): Session.
@@ -34,6 +45,10 @@ def write_study_index(
         study_id (str): Study identifier, as in the summary statistics.
         n_samples (int): Sample size; SuSiE-inf uses it as `n`.
         ld_population (str): gentropy LD population of the study: nfe, csa or afr.
+        sumstats_qc_path (str | None): `fmg qc` output; None leaves the study unflagged.
+
+    Returns:
+        list[str]: The study's `qualityControls` flags; empty when it passes.
     """
     schema = t.StructType(
         [
@@ -59,7 +74,15 @@ def write_study_index(
         ]
     )
     row = (study_id, "external", "gwas", n_samples, [(ld_population, 1.0)], True, [], [])
-    session.spark.createDataFrame([row], schema).write.mode("overwrite").parquet(path)
+    study_index = StudyIndex(
+        _df=session.spark.createDataFrame([row], schema), _schema=StudyIndex.get_schema()
+    )
+    if sumstats_qc_path is not None:
+        study_index = study_index.annotate_sumstats_qc(
+            SummaryStatisticsQC.from_parquet(session, sumstats_qc_path)
+        )
+    study_index.df.write.mode("overwrite").parquet(path)
+    return list(session.spark.read.parquet(path).first()["qualityControls"] or [])
 
 
 def clump(session: Session, sumstats_path: str, clumped_path: str) -> int:
