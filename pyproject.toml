@@ -1,0 +1,27 @@
+[project]
+name = "finemapping-with-gentropy"
+version = "0.1.0"
+description = "Single-study SuSiE-inf fine-mapping of GWAS summary statistics with gentropy, using only public data."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = ["gentropy==3.4.0"]
+
+[project.scripts]
+fmg = "finemapping_with_gentropy.cli:main"
+
+[dependency-groups]
+dev = ["ruff>=0.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "D", "SIM"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
